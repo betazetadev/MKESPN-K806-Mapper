@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from dataclasses import dataclass
 from typing import Dict, Optional, List
+import glob
 
 # Icon definitions using Unicode symbols
 ICONS = {
@@ -94,10 +95,31 @@ def combo_to_xdotool(combo: str) -> str:
         else: out.append(p)
     return "+".join(out)
 
-# ---------- Labels & defaults ----------
+def get_byid_for_event(event_path: str) -> str:
+    """Try to find the /dev/input/by-id symlink that points to this event device"""
+    try:
+        for path in glob.glob("/dev/input/by-id/*"):
+            if os.path.realpath(path) == os.path.realpath(event_path):
+                return path
+    except Exception as e:
+        print(f"[DEBUG] Could not resolve by-id symlink: {e}")
+    return event_path  # fallback to eventX
+
+# ---------- Labels & defaults ---------- 
+# Common key codes for mini keyboards - expand this based on your device
 DEFAULT_LABELS = {
+    # Standard keypad keys
     ecodes.KEY_KP1:"1", ecodes.KEY_KP2:"2", ecodes.KEY_KP3:"3", ecodes.KEY_KP4:"4",
     ecodes.KEY_KP5:"5", ecodes.KEY_KP6:"6", ecodes.KEY_KP7:"7", ecodes.KEY_KP8:"8",
+    # Alternative key codes that mini keyboards might use
+    ecodes.KEY_1:"1", ecodes.KEY_2:"2", ecodes.KEY_3:"3", ecodes.KEY_4:"4",
+    ecodes.KEY_5:"5", ecodes.KEY_6:"6", ecodes.KEY_7:"7", ecodes.KEY_8:"8",
+    # Function keys (some mini keyboards use these)
+    ecodes.KEY_F1:"F1", ecodes.KEY_F2:"F2", ecodes.KEY_F3:"F3", ecodes.KEY_F4:"F4",
+    ecodes.KEY_F5:"F5", ecodes.KEY_F6:"F6", ecodes.KEY_F7:"F7", ecodes.KEY_F8:"F8",
+    # Media keys
+    ecodes.KEY_MUTE:"MUTE", ecodes.KEY_VOLUMEUP:"VOL+", ecodes.KEY_VOLUMEDOWN:"VOL-",
+    ecodes.KEY_PLAYPAUSE:"PLAY", ecodes.KEY_NEXTSONG:"NEXT", ecodes.KEY_PREVIOUSSONG:"PREV",
 }
 SUGGESTED_DEFAULTS = {
     ecodes.KEY_KP1:("combo","Ctrl+Alt+T"),
@@ -309,9 +331,18 @@ class App(tk.Tk):
         
         grid=ttk.Frame(keypad_section, style="Section.TFrame"); grid.pack()
         
-        # Keypad grid with better spacing
-        rows=[[ecodes.KEY_KP1,ecodes.KEY_KP2,ecodes.KEY_KP3,ecodes.KEY_KP4],
-              [ecodes.KEY_KP5,ecodes.KEY_KP6,ecodes.KEY_KP7,ecodes.KEY_KP8]]
+        # Get the actual keys from the device or use defaults
+        # This will be populated based on what keys we detect
+        self.detected_keys = self.get_device_keys()
+        
+        # If we detected keys, use them; otherwise use default layout
+        if self.detected_keys:
+            # Arrange detected keys in a 2x4 grid or adapt layout
+            rows = self.arrange_keys_in_grid(self.detected_keys)
+        else:
+            # Default 2x4 keypad layout
+            rows=[[ecodes.KEY_KP1,ecodes.KEY_KP2,ecodes.KEY_KP3,ecodes.KEY_KP4],
+                  [ecodes.KEY_KP5,ecodes.KEY_KP6,ecodes.KEY_KP7,ecodes.KEY_KP8]]
         self.key_buttons: Dict[int, ttk.Button]={}
         for i, row in enumerate(rows):
             rf=ttk.Frame(grid, style="Section.TFrame"); rf.pack(pady=8)
@@ -443,10 +474,16 @@ class App(tk.Tk):
         self.start_with_path(path)
 
     def start_with_path(self, path: str):
-        self.profile.device_path=path; self.stop_listener(); self.stop_evt=threading.Event()
-        self.listener=Listener(path, self.q, self.stop_evt); self.listener.start(); self.status.set(f"Started on {path}")
+        # Try to store stable symlink
+        stable_path = get_byid_for_event(path)
+        self.profile.device_path = stable_path
+        self.stop_listener()
+        self.stop_evt = threading.Event()
+        self.listener = Listener(stable_path, self.q, self.stop_evt)
+        self.listener.start()
+        self.status.set(f"Started on {stable_path}")
         self.status_indicator.configure(text=ICONS['status_active'])
-        create_tooltip(self.status_indicator, f"Device connected: {path}")
+        create_tooltip(self.status_indicator, f"Device connected: {stable_path}")
 
     def stop_listener(self):
         if getattr(self,"stop_evt",None): self.stop_evt.set()
@@ -570,8 +607,13 @@ class App(tk.Tk):
 
     # ---- persistence ----
     def save_profile(self):
-        data={"device_path":self.profile.device_path,"enabled":self.enabled.get(),
-              "mapping":{str(k):{"kind":v.kind,"value":v.value} for k,v in self.mapping.items()}}
+        # Resolve to by-id symlink if possible
+        dev_path = get_byid_for_event(self.profile.device_path)
+        data={
+            "device_path": dev_path,
+            "enabled": self.enabled.get(),
+            "mapping":{str(k):{"kind":v.kind,"value":v.value} for k,v in self.mapping.items()}
+        }
         try:
             with open(CONFIG_PATH,"w",encoding="utf-8") as f: json.dump(data,f,indent=2)
             self.status.set(f"Saved → {CONFIG_PATH}")
@@ -609,12 +651,16 @@ class App(tk.Tk):
                     messagebox.showerror("Error", payload); self.status.set(payload)
                     self.status_indicator.configure(text=ICONS['status_inactive'])
                 elif kind=="key_down":
-                    code=int(payload);
+                    code=int(payload)
+                    # Debug: Show which key was pressed
+                    key_name = self.get_key_name(code)
+                    print(f"[DEBUG] Key DOWN: {code} ({key_name})")
+                    
                     self.flash_button(code, True)
                     if getattr(self,"_record",False):
                         self.var_code.set(code);
                         self._record=False;
-                        self.status.set(f"Captured key: {code}")
+                        self.status.set(f"Captured key: {code} ({key_name})")
                         if hasattr(self,"record_window") and self.record_window.winfo_exists():
                             self.record_window.destroy()
                     elif self.enabled.get():
@@ -622,18 +668,58 @@ class App(tk.Tk):
                         if act:
                             self.execute(act)
                 elif kind=="key_up":
-                    code=int(payload); self.flash_button(code, False)
+                    code=int(payload)
+                    key_name = self.get_key_name(code)
+                    print(f"[DEBUG] Key UP: {code} ({key_name})")
+                    self.flash_button(code, False)
         except queue.Empty:
             pass
         self.after(60, self.process_q)
 
+    def get_key_name(self, code: int) -> str:
+        """Get a human-readable name for a key code."""
+        # Check if it's a known keypad key
+        if code in DEFAULT_LABELS:
+            return DEFAULT_LABELS[code]
+        
+        # Try to get the name from evdev constants
+        try:
+            for name, value in vars(ecodes).items():
+                if name.startswith('KEY_') and value == code:
+                    return name.replace('KEY_', '')
+        except:
+            pass
+        
+        return f"CODE_{code}"
+    
     def flash_button(self, code:int, down:bool):
         btn=self.key_buttons.get(code)
-        if not btn: return
+        if not btn: 
+            # Key not in our button map - this might be why some keys don't highlight
+            key_name = self.get_key_name(code)
+            print(f"[DEBUG] No button for key {code} ({key_name}) - not in keypad layout")
+            return
+        
         try:
-            if down: btn.configure(style="KeyActive.TButton")
-            else: self.after(120, lambda b=btn: b.configure(style="Key.TButton"))
-        except Exception: pass
+            if down:
+                # Key pressed - show active state
+                btn.configure(style="KeyActive.TButton")
+                print(f"[DEBUG] Highlighting button for key {code}")
+            else:
+                # Key released - return to appropriate state
+                if code in self.mapping:
+                    # If key is mapped, show mapped state
+                    btn.configure(style="KeyMapped.TButton")
+                    # Update text to show mapping indicator
+                    current_text = DEFAULT_LABELS.get(code, str(code))
+                    btn.configure(text=f"{current_text} {ICONS['mapped']}")
+                else:
+                    # If key is not mapped, show normal state
+                    btn.configure(style="Key.TButton")
+                    btn.configure(text=DEFAULT_LABELS.get(code, str(code)))
+                print(f"[DEBUG] Reset button for key {code}")
+        except Exception as e: 
+            print(f"[DEBUG] Error flashing button {code}: {e}")
 
     # ---- execute ----
     def execute(self, act: Action):
@@ -689,6 +775,35 @@ class App(tk.Tk):
         self.var_kind.set("combo")
         self.var_value.set("")
         self.status.set("Ready to add new mapping")
+    
+    def get_device_keys(self) -> List[int]:
+        """Try to detect what keys the connected device actually has."""
+        detected = []
+        if hasattr(self, 'listener') and self.listener and hasattr(self.listener, 'dev') and self.listener.dev:
+            try:
+                caps = self.listener.dev.capabilities()
+                if ecodes.EV_KEY in caps:
+                    # Get all the key codes this device supports
+                    key_codes = caps[ecodes.EV_KEY]
+                    # Filter to reasonable keys (avoid mouse buttons, etc.)
+                    for code in key_codes:
+                        if code in DEFAULT_LABELS or (code >= ecodes.KEY_1 and code <= ecodes.KEY_F24):
+                            detected.append(code)
+            except Exception as e:
+                print(f"[DEBUG] Could not detect device keys: {e}")
+        return detected[:8]  # Limit to 8 keys for 2x4 layout
+    
+    def arrange_keys_in_grid(self, keys: List[int]) -> List[List[int]]:
+        """Arrange detected keys in a 2x4 grid."""
+        # Pad with default keys if we don't have 8
+        default_keys = [ecodes.KEY_KP1, ecodes.KEY_KP2, ecodes.KEY_KP3, ecodes.KEY_KP4,
+                       ecodes.KEY_KP5, ecodes.KEY_KP6, ecodes.KEY_KP7, ecodes.KEY_KP8]
+        
+        while len(keys) < 8:
+            keys.append(default_keys[len(keys)])
+        
+        # Arrange in 2x4 grid
+        return [keys[:4], keys[4:8]]
     
     def destroy(self):
         self.stop_listener(); return super().destroy()

@@ -1,126 +1,128 @@
-# Mini Keypad Mapper
+# MKESPN K806 Mapper
 
-**Mini Keypad Mapper** es una herramienta sencilla para Linux que permite asignar **atajos de teclado** y **comandos personalizados** a un mini teclado USB de 8 teclas (distribución de 2 filas x 4 columnas).
+A minimalist tool (daemon + UI) to map keys of the MKESPN K806 mini-keyboard on Linux.  
+Tested primarily on **Ubuntu 24.04 (GNOME, X11)** with Python 3.12.
 
-Con esta aplicación puedes convertir tu pequeño keypad en un **panel de accesos directos** para abrir aplicaciones, lanzar combinaciones de teclas o ejecutar comandos, todo de forma visual y fácil de configurar.
+This project was created out of necessity: the MKESPN K806 has no reliable Linux support, so this utility lets you map keys via a background daemon and a small Tkinter UI.
 
-> ⚠️ **Nota de compatibilidad:** Actualmente solo está probada con un modelo económico tipo *"8 key programming game keyboard"* (VendorID: `30fa`, ProductID: `1340`).  
-> Si tienes otro modelo, eres libre de hacer un **fork**, adaptar el código y contribuir con mejoras o abrir un *issue* (no aseguramos soporte oficial, pero lo revisaremos con interés).
+## Features
 
----
+- Persistent key mappings in JSON (`~/.keymap.json`).
+- Stable device resolution using `/dev/input/by-id/...` symlinks to survive reboots.
+- Lightweight daemon that listens for key events via `evdev` and triggers actions.
+- Tkinter UI to detect the device, capture key codes, edit mappings, and test them live.
+- Supports:
+  - **combo** → executes a keyboard combination via `xdotool`  
+  - **command** → runs a shell command (e.g., `firefox`, `google-chrome https://example.com`)
 
-## ✨ Características
+## Requirements
 
-- **GUI visual** para asignar acciones a cada tecla
-- Ejecución de **comandos** (ej. `firefox`, `code`, `nautilus`)
-- Ejecución de **combos de teclado** (ej. `Ctrl+Alt+T`, `Super+E`)
-- **Resaltado visual** de la tecla pulsada en el mapa
-- Guardado automático en JSON de las asignaciones
-- **Daemon opcional** para que funcione en segundo plano al iniciar sesión
-- Código abierto con licencia MIT
+- Python 3
+- `python3-evdev`
+- `xdotool` (only works reliably on X11)
+- `python3-tk`
+- Optional: `jq`, `zenity` for helper scripts
 
----
-
-## 🛠️ Requisitos
-
-- **Sistema Operativo:** Linux (probado en Ubuntu 22.04+ con X11/Wayland)
-- **Python:** 3.8+
-- **Dependencias del sistema:**
+Install on Ubuntu/Debian:
 
 ```bash
-sudo apt install -y python3-evdev python3-tk xdotool
+sudo apt update
+sudo apt install -y python3 python3-evdev xdotool python3-tk
 ```
 
----
+## Repository Structure
 
-## ⚙️ Configuración de Permisos
+- `mini_keypad_daemon.py`: background process, listens to device and executes mapped actions.
+- `mini_keypad_mapper.py`: Tkinter UI to create, edit, and save mappings.
+- Example helper scripts: `show_keymap.sh` to display mappings in a dialog.
 
-Por defecto, los dispositivos de entrada en `/dev/input/event*` requieren permisos de administrador. Para usar el mini teclado sin `sudo`, sigue estos pasos:
+## Configuration
 
-### 1. Crear regla udev
+Mappings are stored in `~/.keymap.json`. Example:
 
-Crea el archivo de configuración:
-
-```bash
-sudo nano /etc/udev/rules.d/99-mini-keypad.rules
+```json
+{
+  "device_path": "/dev/input/by-id/usb-MKESPN_K806-event-kbd",
+  "enabled": true,
+  "mapping": {
+    "116": { "kind": "combo", "value": "Ctrl+Alt+T" },
+    "117": { "kind": "command", "value": "firefox" }
+  }
+}
 ```
 
-### 2. Añadir la regla
+## Running the Daemon
 
-Agrega la siguiente línea al archivo:
-
-```
-SUBSYSTEM=="input", ATTRS{idVendor}=="30fa", ATTRS{idProduct}=="1340", MODE="0666"
-```
-
-### 3. Recargar las reglas
-
-```bash
-sudo udevadm control --reload
-sudo udevadm trigger
-```
-
-### 4. Reconectar el dispositivo
-
-Desconecta y vuelve a conectar el teclado. Ahora tu usuario podrá acceder al dispositivo sin usar `sudo`.
-
----
-
-## 🚀 Uso
-
-### GUI (Configuración)
-
-1. Ejecuta la aplicación:
-   ```bash
-   python3 mini_keypad_mapper.py
-   ```
-
-2. **Selecciona tu dispositivo** (`/dev/input/eventXX`)
-
-3. **Pulsa "Record from device"** para capturar teclas
-
-4. **Asigna comandos o combos** y guarda la configuración
-
-5. La configuración se almacena automáticamente en `~/.keymap.json`
-
-### Daemon (Ejecución en Segundo Plano)
-
-Una vez configurado, puedes arrancar el daemon minimalista:
+You can start the daemon manually:
 
 ```bash
 python3 mini_keypad_daemon.py
 ```
 
-#### Ejecutar al inicio de sesión
+Or configure it as a **systemd user service** so it runs automatically.
 
-Para que se ejecute automáticamente:
+Create `~/.config/systemd/user/mkespn-k806.service` with the following content:
 
-- **Opción 1:** Añádelo en "Aplicaciones al inicio" de tu entorno de escritorio
-- **Opción 2:** Crea un servicio systemd `--user`
+```ini
+[Unit]
+Description=MKESPN K806 Keymap Daemon
+After=graphical-session.target
 
----
+[Service]
+ExecStart=/usr/bin/python3 /home/USER/path/to/mini_keypad_daemon.py
+Restart=always
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/USER/.Xauthority
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/USER/bin:/home/USER/.local/bin
 
-## 💡 Ideas para el Futuro
+[Install]
+WantedBy=default.target
+```
 
-- [ ] Soporte de **perfiles de layouts** (cambiar entre distintos mapeos guardados)
-- [ ] Mejoras en la **interfaz y experiencia de usuario**
-- [ ] **Layouts predefinidos** para distintos tipos de teclados
-- [ ] Mayor **compatibilidad** con modelos adicionales de keypads
+Replace `USER` and adjust the path.
 
----
+Then enable it:
 
-## 🤝 Contribuciones
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now mkespn-k806.service
+```
 
-¡Las contribuciones son bienvenidas! 🎉
+Check status:
 
-- Si tienes **otro modelo** de mini teclado, puedes hacer un fork y adaptarlo
-- Si detectas un **bug** o necesitas soporte para un teclado distinto, abre un *issue* (no prometemos solucionarlo, pero lo revisaremos)
-- **Pull requests** con mejoras son siempre apreciados
+```bash
+systemctl --user status mkespn-k806.service
+journalctl --user -u mkespn-k806.service -f
+```
 
----
+## Notes & Limitations
 
-## 📄 Licencia
+- The daemon does **not detect hotplug**: if you connect the keypad after login, restart the daemon.
+- Requires proper permissions on `/dev/input/event*`.  
+  Add your user to the `input` group or create a `udev` rule, e.g.:
 
-Este proyecto se distribuye bajo **licencia MIT**.
+  ```
+  SUBSYSTEM=="input", ATTRS{idVendor}=="30fa", ATTRS{idProduct}=="1340", MODE="0666"
+  ```
 
-Eres libre de usarlo, modificarlo y compartirlo, siempre que incluyas la licencia original.
+- Tested on Ubuntu GNOME X11; on Wayland `xdotool` is limited.
+- No support for controlling LED/backlight of the keypad.
+
+## Roadmap / Ideas
+
+- Support multiple profiles.
+- Predefined layouts (selectable profiles).
+- Wayland compatibility (alternative to xdotool).
+- Auto-detect and reconnect device on hotplug.
+- Improved UI/UX with icons and cleaner design.
+
+## License
+
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
+
+## Contributing
+
+Contributions are welcome!  
+Feel free to fork, submit PRs, or open issues if you need support for other devices.
+
+GitHub repo: <https://github.com/amendezcabrera/mkespn-k806-mapper>

@@ -13,7 +13,7 @@ This project was created out of necessity: the MKESPN K806 has no reliable Linux
 - Tkinter UI to detect the device, capture key codes, edit mappings, and test them live.
 - Supports:
   - **combo** → executes a keyboard combination via `xdotool`  
-  - **command** → runs a shell command (e.g., `firefox`, `google-chrome https://example.com`)
+  - **command** → runs a shell command (e.g., `firefox`, `google-chrome https://betazeta.dev`)
 
 ## Requirements
 
